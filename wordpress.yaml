@@ -1,0 +1,149 @@
+---
+- hosts: local 
+  vars_files:
+    - var.yml
+  become: true
+  tasks:
+    #==========================================================================
+    - name: Install apache2
+      apt: name=apache2 update_cache=no state=latest
+
+    - name: Enabled mod_rewrite
+      apache2_module: name=rewrite state=present
+      notify:
+         - restart apache2
+  
+    #==========================================================================
+    - name: Install MySQL
+      action: apt pkg={{ item }} state=present
+      with_items:
+      - build-essential
+      - libmysqlclient-dev
+      - python3-dev
+      - python3-mysqldb
+      - python3-mysql.connector
+      - mysql-server
+      - mysql-client
+  
+    - name: Copying .my.cnf to remote
+      become: true
+      copy:
+        src: .my.cnf
+        dest: /root/.my.cnf
+        owner: root
+        group: root
+        mode: '0644'
+        remote_dest: yes
+  
+    - name: Start the MySQL service
+      action: service name=mysql state=started
+  
+    - name: Remove the test database
+      mysql_db: name=test state=absent
+  
+    - name: Create deploy user for mysql
+      mysql_user: user="deploy" host="%" password={{mysql_db_password}} priv=*.*:ALL,GRANT
+  
+    - name: Ensure anonymous users are not in the database
+      mysql_user: user="" host={{ item }} state=absent
+      with_items:
+      - 127.0.0.1
+      - ::1
+      - localhost
+  
+    - name: Update mysql root password for all root accounts
+      mysql_user: name=root host={{ item }} password={{mysql_db_password}}
+      with_items:
+      - 127.0.0.1
+      - ::1
+      - localhost
+ 
+    #==========================================================================
+    - name: Install PHP
+      apt: name={{item}} update_cache=no state=present
+      with_items:
+        - php 
+        - libapache2-mod-php 
+        - php-fpm
+   
+    - name: Copying info.php to remote
+      become: true
+      copy:
+        src: info.php 
+        dest: /var/www/html/info.php 
+        owner: root
+        group: root
+        mode: '0644'
+        remote_dest: yes
+
+    #==========================================================================
+    - name: Concantenate the install and directory into a single variable
+      set_fact:
+        path: "{{wp_install_path}}/{{wp_directory_name}}"
+     
+    - name: Only install WordPress when there is no index.php in the path
+      stat:
+        path: "{{path}}/index.php"
+      register: stat_result
+     
+    - name: Ensure that installation directory exists
+      file: path={{path}} state=directory
+      when: stat_result.stat.exists == False
+     
+    - name: Download Latest Version to /tmp
+      get_url: url=https://wordpress.org/latest.tar.gz force=no dest=/tmp/wordpress.tar.gz
+      when: stat_result.stat.exists == False
+     
+    - name: Extract archive
+      unarchive: src=/tmp/wordpress.tar.gz dest=/tmp copy=no
+      when: stat_result.stat.exists == False
+     
+    - name: Move extracted directory to {{path}}
+      shell: cp -r -n /tmp/wordpress/* {{path}}
+      when: stat_result.stat.exists == False
+     
+    - name: Remove wordpress.tar.gz
+      file: path=/tmp/wordpress.tar.gz state=absent
+      when: stat_result.stat.exists == False
+     
+    - name: Fetch random salts for WordPress config
+      local_action: command curl https://api.wordpress.org/secret-key/1.1/salt/
+      register: "wp_salt"
+      become: no
+      become_method: sudo
+     
+    - name: Copy WordPress config file
+      template: src=wp-config.php dest={{path}}
+     
+    - name: Change ownership of installation directory
+      file: path={{path}} owner=www-data group=www-data  state=directory recurse=yes setype=httpd_sys_content_t
+      when: stat_result.stat.exists == False
+     
+    - name: Change ownership of wp-content directory
+      file: path={{path}}/wp-content/ owner=www-data group=www-data mode=755 state=directory recurse=yes
+      when: stat_result.stat.exists == False
+     
+    - name: Create a our WordPress database
+      mysql_db:
+        config_file: "/root/.my.cnf"
+        name: "{{wp_db_name}}"
+        state: present
+     
+    - name: Create a new database user and password
+      mysql_user:
+        config_file: "/root/.my.cnf"
+        name: "{{wp_db_username}}"
+        password: "{{wp_db_password}}"
+        priv: '{{wp_db_name}}.*:ALL'
+        state: present
+
+  handlers:
+    - name: Restart apache2
+      service: name=apache2 state=restarted
+
+    - name: Restart php7.4-fpm
+      service: name=php7.4-fpm state=restarted
+
+    - name: Restart nginx
+      service: name=nginx state=restarted
+

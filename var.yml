@@ -1,0 +1,13 @@
+---
+# defaults file for wordpress
+wp_install_path : '/var/www/html/'
+wp_directory_name: 'wordpress'
+ 
+wp_db_name: 'wordpress'
+wp_db_username: 'username'
+wp_db_password: 'password'
+wp_db_host: 'wphost'
+wp_table_prefix: 'wp_'
+wp_debug_mode: 'FALSE'
+
+mysql_db_password: 'password'
