@@ -1,5 +1,5 @@
 ---
-- hosts: local 
+- hosts: nodes 
   vars_files:
     - var.yml
   become: true
@@ -7,6 +7,8 @@
     #==========================================================================
     - name: Install apache2
       apt: name=apache2 update_cache=no state=latest
+      with_items:
+        - apache2 
 
     - name: Enabled mod_rewrite
       apache2_module: name=rewrite state=present
@@ -32,8 +34,6 @@
         dest: /root/.my.cnf
         owner: root
         group: root
-        mode: '0644'
-        remote_dest: yes
   
     - name: Start the MySQL service
       action: service name=mysql state=started
@@ -73,69 +73,48 @@
         dest: /var/www/html/info.php 
         owner: root
         group: root
-        mode: '0644'
-        remote_dest: yes
 
     #==========================================================================
-    - name: Concantenate the install and directory into a single variable
-      set_fact:
-        path: "{{wp_install_path}}/{{wp_directory_name}}"
-     
-    - name: Only install WordPress when there is no index.php in the path
-      stat:
-        path: "{{path}}/index.php"
-      register: stat_result
-     
-    - name: Ensure that installation directory exists
-      file: path={{path}} state=directory
-      when: stat_result.stat.exists == False
-     
-    - name: Download Latest Version to /tmp
-      get_url: url=https://wordpress.org/latest.tar.gz force=no dest=/tmp/wordpress.tar.gz
-      when: stat_result.stat.exists == False
-     
-    - name: Extract archive
-      unarchive: src=/tmp/wordpress.tar.gz dest=/tmp copy=no
-      when: stat_result.stat.exists == False
-     
-    - name: Move extracted directory to {{path}}
-      shell: cp -r -n /tmp/wordpress/* {{path}}
-      when: stat_result.stat.exists == False
-     
-    - name: Remove wordpress.tar.gz
-      file: path=/tmp/wordpress.tar.gz state=absent
-      when: stat_result.stat.exists == False
-     
-    - name: Fetch random salts for WordPress config
-      local_action: command curl https://api.wordpress.org/secret-key/1.1/salt/
-      register: "wp_salt"
-      become: no
-      become_method: sudo
-     
-    - name: Copy WordPress config file
-      template: src=wp-config.php dest={{path}}
-     
-    - name: Change ownership of installation directory
-      file: path={{path}} owner=www-data group=www-data  state=directory recurse=yes setype=httpd_sys_content_t
-      when: stat_result.stat.exists == False
-     
-    - name: Change ownership of wp-content directory
-      file: path={{path}}/wp-content/ owner=www-data group=www-data mode=755 state=directory recurse=yes
-      when: stat_result.stat.exists == False
-     
-    - name: Create a our WordPress database
-      mysql_db:
-        config_file: "/root/.my.cnf"
-        name: "{{wp_db_name}}"
-        state: present
-     
-    - name: Create a new database user and password
-      mysql_user:
-        config_file: "/root/.my.cnf"
-        name: "{{wp_db_username}}"
-        password: "{{wp_db_password}}"
-        priv: '{{wp_db_name}}.*:ALL'
-        state: present
+    - name: Install WordPress
+      apt: name={{item}} update_cache=no state=present
+      with_items:
+        - wordpress
+        - php
+        - libapache2-mod-php
+        - mysql-server
+        - php-mysql
+    
+    - name: Copying wordpress.conf to remote /etc/apache2/sites-available/
+      become: true
+      copy:
+        src: wordpress.conf 
+        dest: /etc/apache2/sites-available/wordpress.conf
+        owner: root
+        group: root
+
+    - name: Enable the site
+      become: true
+      shell: a2ensite wordpress 
+
+    - name: Enable URL rewriting
+      become: true
+      shell: a2enmod rewrite 
+
+    - name: Reload Apache2 
+      become: true
+      shell: service apache2 reload  
+
+    - name: Copying config-localhost.php to remote /etc/wordpress/
+      become: true
+      copy:
+        src: config-localhost.php 
+        dest: /etc/wordpress/config-localhost.php 
+        owner: root
+        group: root
+
+    - name: Enable MySQL 
+      become: true
+      shell: service mysql start 
 
   handlers:
     - name: Restart apache2
